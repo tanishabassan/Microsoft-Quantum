@@ -1,8 +1,6 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT License.
 
-
-namespace Microsoft.Quantum.Canon {
+namespace Microsoft.Quantum {
+    // open microsoft software to include all gates needed in code. 
     open Microsoft.Quantum.Primitive;
 
     /// # Summary
