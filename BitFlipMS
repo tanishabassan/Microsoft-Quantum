@@ -1,136 +1,60 @@
 
-namespace Microsoft.Quantum {
-    // open microsoft software to include all gates needed in code. 
+namespace Microsoft.Microsoft_Quantum.Correcting_BitFlip_Errors {
     open Microsoft.Quantum.Primitive;
-
-    /// # Summary
-    /// Private operation used to implement both the bit flip encoder and decoder.
-    ///
-    /// Note that this encoder can make use of in-place coherent recovery,
-    /// in which case it will "cause" the error described
-    /// by the initial state of `auxQubits`.
-    /// In particular, if `auxQubits` are initially in the state $\ket{10}$, this
-    /// will cause an $X_1$ error on the encoded qubit.
-    ///
-    /// # References
-    /// - doi:10.1103/PhysRevA.85.044302
-    operation BFEncoderImpl(coherentRecovery : Bool, data : Qubit[], scratch : Qubit[])  : ()
+    open Microsoft.Quantum.Canon;
+    open Microsoft.Quantum.Extensions.Math;
+   
+   // one qubit information encoded into 3 qubits and 2 aux qubits in state |00〉for reference 
+   operation EncodeIntoBitFlipCode(
+            data : Qubit, auxillaryQubits : Qubit[]
+        ) : ()
     {
         body {
-            if (coherentRecovery) {
-                (Controlled(X))(scratch, data[0]);
-            }
-            (Controlled(X))(data, scratch[0]);
-            (Controlled(X))(data, scratch[1]);
+     
+            // CNOT applied to entangle to data qubits 
+            ApplyToEachCA(CNOT(data, _), auxillaryQubits);
         }
 
+       // decoding is the adjoint of encoding so use Adjoint function 
         adjoint auto
+        controlled auto
+        controlled adjoint auto
     }
-
-    /// # Summary
-    /// Encodes into the [3, 1, 3] / ⟦3, 1, 1⟧ bit-flip code.
-    ///
-    /// # Input
-    /// ## physRegister
-    /// A register of physical qubits representing the data to be protected.
-    /// ## auxQubits
-    /// A register of auxillary qubits initially in the $\ket{00}$ state to be
-    /// used in encoding the data to be protected.
-    ///
-    /// # Output
-    /// The physical and auxillary qubits used in encoding, represented as a
-    /// logical register.
-    ///
-    /// # See Also
-    /// - Microsoft.Quantum.Canon.LogicalRegister
-    operation BitFlipEncoder(physRegister : Qubit[], auxQubits : Qubit[])  : LogicalRegister
-    {
+    ///////// Learning error information without knowing state of qubit /////////
+    
+    // checking parity of errors and seeing if values return positive 
+    operation CheckBitFlipCodeStateParity() : () {
         body {
-            BFEncoderImpl(false, physRegister, auxQubits);
+            //initialize qubit register 
+            using (register = Qubit[3]) {
 
-            let logicalRegister = LogicalRegister(physRegister + auxQubits);
-            return logicalRegister;
+                let data = register[0];
+                let auxillaryQubits = register[1..2];
+                // prepares qubits in rotation on x-axis 
+                Rx(PI() / 3.0, data);
+
+                // encode state 
+                EncodeIntoBitFlipCode(data, auxillaryQubits);
+
+                // measuring Z₀Z₁ and Z₁Z₂ to check for what values +/- is returned for parity to distinguish which error has occured without cheching state of qubit 
+                Assert(
+                    [PauliZ; PauliZ; PauliI], register, Zero, "Z₀Z₁ was One!"
+                );
+                Assert(
+                    [PauliI; PauliZ; PauliZ], register, Zero, "Z₁Z₂ was One!"
+                );
+
+                // applying measurement 
+
+                let parity01 = Measure([PauliZ; PauliZ; PauliI], register);
+                let parity12 = Measure([PauliI; PauliZ; PauliZ], register);
+
+               // inverse to decoding to check if the state of qubit is perserved 
+                (Adjoint EncodeIntoBitFlipCode)(data, auxillaryQubits);
+                (Adjoint Rx)(PI() / 3.0, data);
+                Assert([PauliZ], [data], Zero, "Didn't return to |0〉!");
+            }
         }
     }
 
-    /// # Summary
-    /// Decodes from the [3, 1, 3] / ⟦3, 1, 1⟧ bit-flip code.
-    ///
-    /// # Input
-    /// ## logicalRegister
-    /// A code block of the bit-flip code.
-    ///
-    /// # Output
-    /// A tuple of the data encoded into the logical register, and the auxillary
-    /// qubits used to represent the syndrome.
-    ///
-    /// # See Also
-    /// - Microsoft.Quantum.Canon.LogicalRegister
-    /// - Microsoft.Quantum.Canon.BitFlipEncoder
-    operation BitFlipDecoder(logicalRegister : LogicalRegister)  : (Qubit[], Qubit[])
-    {
-        body {
-            let physRegister = [logicalRegister[0]];
-            let auxQubits = logicalRegister[1..2];
-
-            (Adjoint BFEncoderImpl)(false, physRegister, auxQubits);
-
-            return (physRegister, auxQubits);
-        }
-    }
-
-    /// # Summary
-    /// Returns a QECC value representing the ⟦3, 1, 1⟧ bit flip code encoder and
-    /// decoder with in-place syndrome measurement.
-    ///
-    /// # Output
-    /// Returns an implementation of a quantum error correction code by 
-    /// specifying a `QECC` type.
-    operation  BitFlipCode()  : QECC
-    {
-        body {
-            let e = EncodeOp(BitFlipEncoder);
-            let d = DecodeOp(BitFlipDecoder);
-            let s = SyndromeMeasOp(MeasureStabilizerGenerators([
-                [PauliZ; PauliZ; PauliI];
-                [PauliI; PauliZ; PauliZ]
-            ], _, MeasureWithScratch));
-            let code = QECC(e, d, s);
-            return code;
-        }
-    }
-
-    /// # Summary
-    /// Function for recovery Pauli operations for given symdrome measurement
-    /// by table lookup for the ⟦3, 1, 1⟧ bit flip code.
-    ///
-    /// # Output
-    /// Function of type `RecoveryFn` that takes a syndrome measurement 
-    /// `Result[]` and returns the `Pauli[]` operations that corrects the 
-    /// detected error.
-    ///
-    /// # See Also
-    /// - Microsoft.Quantum.Canon.RecoveryFn
-    function BitFlipRecoveryFn()  : RecoveryFn
-    {
-        return TableLookupRecovery([
-            [PauliI; PauliI; PauliI];
-            [PauliX; PauliI; PauliI];
-            [PauliI; PauliI; PauliX];
-            [PauliI; PauliX; PauliI]
-        ]);
-    }
-
-}
-© 2018 GitHub, Inc.
-Terms
-Privacy
-Security
-Status
-Help
-Contact GitHub
-API
-Training
-Shop
-Blog
-About
+    
